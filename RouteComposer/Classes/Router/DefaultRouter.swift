@@ -97,6 +97,9 @@ public struct DefaultRouter: InterceptableRouter, MainThreadChecking {
                         return result
                     }
 
+                    let rootViewController: UIViewController?
+                    let factory: AnyFactory?
+
                     // Creates a class responsible to run the tasks for this particular step
                     let viewControllerTaskRunner = try taskStack.taskRunnerFor(step: step, with: context)
 
@@ -105,35 +108,63 @@ public struct DefaultRouter: InterceptableRouter, MainThreadChecking {
                     case .success(let viewController):
                         logger?.log(.info("\(String(describing: step)) found " +
                                 "\(String(describing: viewController)) to start the navigation process from."))
-                        try viewControllerTaskRunner.run(on: viewController, with: context)
-                        return (rootViewController: viewController, result.factories)
+//                        try viewControllerTaskRunner.run(on: viewController, with: context)
+//                        return (rootViewController: viewController, result.factories)
+                        rootViewController = viewController
+                        factory = StartingFactoryBox<Context>(startingViewController: viewController)
                     case .build(let originalFactory):
                         // If the view controller to start from is not found, but the current step has a `Factory` to build it,
                         // then add factory to the stack
                         logger?.log(.info("\(String(describing: step)) hasn't found a corresponding view " +
                                 "controller in the stack, so it will be built using \(String(describing: originalFactory))."))
 
-                        // Wrap the `Factory` with the decorator that will
-                        // handle the view controller and post task chain after the view controller creation.
-                        var factory = FactoryDecorator(factory: originalFactory,
-                                viewControllerTaskRunner: viewControllerTaskRunner)
+                        rootViewController = nil
+                        factory = originalFactory
 
-                        // Prepares the `Factory` for integration
-                        // If a `Factory` cannot prepare itself (e.g. does not have enough data in context)
-                        // then the view controllers stack can not be built
-                        try factory.prepare(with: context)
-
-                        // Allows to the `Factory` to change the current factory stack if needed.
-                        var factories = try factory.scrapeChildren(from: result.factories)
-
-                        // Adds the `Factory` to the beginning of the stack as the router is reading the configuration backwards.
-                        factories.insert(factory, at: 0)
-                        return (rootViewController: result.rootViewController, factories: factories)
+//                        // Wrap the `Factory` with the decorator that will
+//                        // handle the view controller and post task chain after the view controller creation.
+//                        var factory = FactoryDecorator(factory: originalFactory,
+//                                viewControllerTaskRunner: viewControllerTaskRunner)
+//
+//                        // Prepares the `Factory` for integration
+//                        // If a `Factory` cannot prepare itself (e.g. does not have enough data in context)
+//                        // then the view controllers stack can not be built
+//                        try factory.prepare(with: context)
+//
+//                        // Allows to the `Factory` to change the current factory stack if needed.
+//                        var factories = try factory.scrapeChildren(from: result.factories)
+//
+//                        // Adds the `Factory` to the beginning of the stack as the router is reading the configuration backwards.
+//                        factories.insert(factory, at: 0)
+//                        return (rootViewController: result.rootViewController, factories: factories)
                     case .none:
                         logger?.log(.info("\(String(describing: step)) hasn't found a corresponding view " +
                                 "controller in the stack, so router will continue to search."))
+                        rootViewController = nil
+                        factory = nil
+//                        return result
+                    }
+
+                    guard let factoryToProcess = factory else {
                         return result
                     }
+
+                    // Wrap the `Factory` with the decorator that will
+                    // handle the view controller and post task chain after the view controller creation.
+                    var wrappedFactory = FactoryDecorator(factory: factoryToProcess,
+                            viewControllerTaskRunner: viewControllerTaskRunner)
+
+                    // Prepares the `Factory` for integration
+                    // If a `Factory` cannot prepare itself (e.g. does not have enough data in context)
+                    // then the view controllers stack can not be built
+                    try wrappedFactory.prepare(with: context)
+
+                    // Allows to the `Factory` to change the current factory stack if needed.
+                    var factories = try wrappedFactory.scrapeChildren(from: result.factories)
+
+                    // Adds the `Factory` to the beginning of the stack as the router is reading the configuration backwards.
+                    factories.insert(wrappedFactory, at: 0)
+                    return (rootViewController: rootViewController, factories: factories)
                 })
 
         //Throws an exception if it hasn't found a view controller to start the stack from.

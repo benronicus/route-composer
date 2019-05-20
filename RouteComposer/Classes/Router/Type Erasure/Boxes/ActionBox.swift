@@ -44,4 +44,7 @@ struct ActionBox<A: Action>: AnyAction, AnyActionBox, CustomStringConvertible, M
         return false
     }
 
+    func findContainer(in viewController: UIViewController) -> ContainerViewController? {
+        return nil
+    }
 }

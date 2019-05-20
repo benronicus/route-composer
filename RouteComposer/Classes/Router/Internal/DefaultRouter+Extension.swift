@@ -7,6 +7,115 @@ import UIKit
 
 extension DefaultRouter {
 
+    // It seems that it could've simplify stuff and potentially remove `DefaultDelayedIntegrationHandler`,
+    // but it does not consider the fact that there might be a finder factory in the middle of the chain
+    // in which might be few simultaneous pushes. So it seems like a is wrong direction to go.
+    // Simple example:
+    // Replace path to `try? router.navigate(to: ConfigurationHolder.configuration.emptyAndProductScreen, with: ProductContext(productId: "231"))`
+    // in PromptViewController and you'll see why it if impossible with this approach
+    struct StartingFactoryBox<C>: AnyFactory {
+
+        var action: AnyAction
+
+        private weak var startingViewController: UIViewController?
+
+        private let initialControllerDescription: String
+
+        private var context: C?
+
+        init(startingViewController: UIViewController) {
+            self.startingViewController = startingViewController
+            self.initialControllerDescription = String(describing: startingViewController)
+            self.action = ActionBox(ViewControllerActions.NilAction())
+        }
+
+        mutating func prepare<Context>(with context: Context) throws {
+            guard let typedContext = Any?.some(context as Any) as? C else {
+                throw RoutingError.typeMismatch(C.self, .init("\(String(describing: initialControllerDescription)) does " +
+                        "not accept \(String(describing: context.self)) as a context."))
+            }
+            self.context = typedContext
+        }
+
+        func build<Context>(with context: Context) throws -> UIViewController {
+            guard let startingViewController = self.startingViewController else {
+                throw RoutingError.initialController(.deallocated, .init("A view controller \(initialControllerDescription) that has been chosen as a " +
+                        "starting point of the navigation process was destroyed while the router was waiting for the interceptors to finish."))
+            }
+            return startingViewController
+        }
+
+        mutating func scrapeChildren(from factories: [AnyFactory]) throws -> [AnyFactory] {
+            guard let startingViewController = startingViewController,
+                  let container = factories.first?.action.findContainer(in: startingViewController) else {
+                return factories
+            }
+
+            var otherFactories: [AnyFactory] = []
+            var isNonEmbeddableFound = false
+            let children = factories.compactMap({ child -> DelayedIntegrationFactory<C>? in
+                guard !isNonEmbeddableFound, child.action.isEmbeddable(to: type(of: container)) else {
+                    otherFactories.append(child)
+                    isNonEmbeddableFound = true
+                    return nil
+                }
+                return DelayedIntegrationFactory(child)
+            })
+            guard children.count > 1 else {
+                return factories
+            }
+            guard let typedContext = Any?.some(context as Any) as? C else {
+                throw RoutingError.typeMismatch(C.self, .init("\(String(describing: initialControllerDescription)) does " +
+                        "not accept \(String(describing: context.self)) as a context."))
+            }
+            self.action = SimultaneousIntegrationAction(containerViewController: container, children: children, context: typedContext)
+            return otherFactories
+        }
+
+        struct SimultaneousIntegrationAction<C>: AnyAction {
+
+            private weak var containerViewController: ContainerViewController?
+
+            private var children: [DelayedIntegrationFactory<C>] = []
+
+            let context: C
+
+            init(containerViewController: ContainerViewController, children: [DelayedIntegrationFactory<C>], context: C) {
+                self.containerViewController = containerViewController
+                self.children = children
+                self.context = context
+            }
+
+            func findContainer(in viewController: UIViewController) -> ContainerViewController? {
+                return nil
+            }
+
+            func perform(with viewController: UIViewController, on existingController: UIViewController, with delayedIntegrationHandler: DelayedActionIntegrationHandler, nextAction: AnyAction?, animated: Bool, completion: @escaping (ActionResult) -> Void) {
+                guard let containerViewController = containerViewController else {
+                    completion(.failure(RoutingError.compositionFailed(.init(""))))
+                    return
+                }
+                do {
+                    let containedViewControllers = try ChildCoordinator(childFactories: children).build(with: context, integrating: containerViewController.containedViewControllers)
+                    containerViewController.replace(containedViewControllers: containedViewControllers, animated: animated, completion: {
+                        completion(.continueRouting)
+                    })
+                } catch let error {
+                    completion(.failure(error))
+                }
+
+            }
+
+            func perform(embedding viewController: UIViewController, in childViewControllers: inout [UIViewController]) throws {
+                return
+            }
+
+            func isEmbeddable(to container: ContainerViewController.Type) -> Bool {
+                return false
+            }
+        }
+    }
+
     struct InterceptorRunner {
 
         private var interceptors: [AnyRoutingInterceptor]
@@ -211,11 +320,12 @@ extension DefaultRouter {
 
         private let stepTaskRunner: StepTaskTaskRunner
 
-        let action: AnyAction
+        var action: AnyAction {
+            return factory.action
+        }
 
         init(factory: AnyFactory, viewControllerTaskRunner: StepTaskTaskRunner) {
             self.factory = factory
-            self.action = factory.action
             self.stepTaskRunner = viewControllerTaskRunner
         }
 

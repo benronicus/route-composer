@@ -18,39 +18,15 @@ struct ContainerActionBox<A: ContainerAction>: AnyAction, AnyActionBox, CustomSt
                  nextAction: AnyAction?,
                  animated: Bool,
                  completion: @escaping (ActionResult) -> Void) {
+        guard let containerController: A.ViewController = UIViewController.findContainer(of: existingController) else {
+            completion(.failure(RoutingError.typeMismatch(ActionType.ViewController.self, RoutingError.Context("Container of " +
+                    "\(String(describing: ActionType.ViewController.self)) type cannot be found to perform \(action)"))))
+            return
+        }
         assertIfNotMainThread()
-        if let delayedController = delayedIntegrationHandler.containerViewController {
-            guard delayedController is A.ViewController else {
-                delayedIntegrationHandler.purge(animated: animated, completion: {
-                    self.perform(with: viewController,
-                            on: existingController,
-                            with: delayedIntegrationHandler,
-                            nextAction: nextAction,
-                            animated: animated,
-                            completion: completion)
-                })
-                return
-            }
-            embed(viewController: viewController, with: delayedIntegrationHandler, completion: completion)
-        } else {
-            guard let containerController: A.ViewController = UIViewController.findContainer(of: existingController) else {
-                completion(.failure(RoutingError.typeMismatch(ActionType.ViewController.self, .init("Container of " +
-                        "\(String(describing: ActionType.ViewController.self)) type cannot be found to perform \(action)"))))
-                return
-            }
-            let shouldDelayPerforming = nextAction?.isEmbeddable(to: A.ViewController.self) ?? false
-            if shouldDelayPerforming {
-                delayedIntegrationHandler.update(containerViewController: containerController, animated: animated, completion: {
-                    self.embed(viewController: viewController, with: delayedIntegrationHandler, completion: completion)
-                })
-            } else {
-                delayedIntegrationHandler.purge(animated: animated, completion: {
-                    self.action.perform(with: viewController, on: containerController, animated: animated) { result in
-                        self.assertIfNotMainThread()
-                        completion(result)
-                    }
-                })
-            }
+        action.perform(with: viewController, on: containerController, animated: animated) { result in
+            self.assertIfNotMainThread()
+            completion(result)
         }
     }
 
@@ -75,6 +51,13 @@ struct ContainerActionBox<A: ContainerAction>: AnyAction, AnyActionBox, CustomSt
 
     func isEmbeddable(to container: ContainerViewController.Type) -> Bool {
         return container is A.ViewController.Type
+    }
+
+    func findContainer(in viewController: UIViewController) -> ContainerViewController? {
+        guard let containerController: A.ViewController = UIViewController.findContainer(of: viewController) else {
+            return nil
+        }
+        return containerController
     }
 
 }

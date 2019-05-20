@@ -21,6 +21,8 @@ protocol DelayedActionIntegrationHandler: AnyObject {
 
 protocol AnyAction {
 
+    func findContainer(in viewController: UIViewController) -> ContainerViewController?
+
     func perform(with viewController: UIViewController,
                  on existingController: UIViewController,
                  with delayedIntegrationHandler: DelayedActionIntegrationHandler,
